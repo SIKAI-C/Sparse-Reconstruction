@@ -1,0 +1,115 @@
+% % Process the image U and mask Ind to form the matrix A and vector b
+Image = imread('256_256_buildings.png')
+OriginalImage = rgb2gray(Image)
+% Mask = imread('512_512_handwriting.png')/255
+% OriginalImage = double(Image)
+% MaskInd = double(Mask)
+% % 这里我们先实现一个instance，因此图片的大小认为已知，且为512*512
+% % dim = size(OriginalImage)
+% % dim = dim(1)
+% % MaskInd(MaskInd == 255) = 1  % use the standart form of the Ind matrix
+bsz = 8
+FuncForBlock = @(block_struct)...
+    vec(block_struct.data);
+u = vec(blockproc(OriginalImage, [bsz,bsz], FuncForBlock))
+reform_u = reformImage(u,256,8)
+check = isequal(OriginalImage,reform_u)
+% Ind = vec(blockproc(MaskInd, [bsz,bsz], FuncForBlock))
+% A = selectionMatrix(Ind)
+% b = A * u
+% 
+Psi = get_Psi(512,512,8)
+szb = size(b)
+s = szb(1)
+sgm = 0.01/s
+obj = [zeros(512*512,1),ones(512*512,1)]
+csts = [zeros(512*512,1);
+        zeros(512*512,1);
+        b+sgm*ones(s,1);
+        -b+sgm*ones(s,1)]
+eqs = [Psi,-speye(512*512);
+       -Psi,-speye(512*512);
+       A,sparse(s,512*512);
+       -A,sparse(s,512*512)]
+
+   
+lb = [-realmax*ones(512*512,1);
+      sparse(512*512,1)]
+% ub = 10*ones(2*512*512,1)
+ub = []
+beq = []
+% beq = 0
+% Aeq = sparse(1,2*512*512)
+Aeq = []
+options = optimoptions('linprog','Algorithm','interior-point')
+[x,fval,exitflag,output] = linprog(obj,eqs,csts,Aeq,beq,lb,ub,options)
+
+
+% x = linprog(obj,eqs,csts)
+
+% reform_x = reformImage(x(1:262144))
+% imshow(reform_x,[])
+
+% reform_u = reformImage(u)
+% check = isequal(OriginalImage,reform_u)
+% imshow(reform_u./255)
+% image(OriginalImage)
+
+% quality = mypsnr(vec(reform_u),vec(reform_x))
+
+function Ig = reformImage(vec,sz,bsz)
+    Ig = zeros(sz,sz);
+    bn = sz/bsz  %the number of blocks each row(or column)
+    tbn = bn*bn  %total block number
+    auxiliaryMatrix = reshape(vec, [bsz*bsz,tbn]);
+    index_x = [1,(floor((1:tbn)./bn)+1)];
+    IndexX = index_x(1:tbn);
+    IndexUp = (IndexX-1)*bsz+1;
+    IndexDown = IndexUp+(bsz-1);
+    index_y = (1:tbn)-bn*floor((1:tbn)./bn);
+    index_y(index_y==0) = bn;
+    IndexY = index_y;
+    IndexLeft = bsz*(IndexY-1)+1;
+    IndexRight = IndexLeft+(bsz-1);
+    for n = 1:tbn
+        vec1 = auxiliaryMatrix(:,n);
+        submatrix = reshape(vec1,[bsz,bsz]);
+        Ig(IndexUp(n):IndexDown(n),IndexLeft(n):IndexRight(n)) = submatrix';
+    end
+    Ig = Ig';
+end
+function A = selectionMatrix(IndVec,sz)
+    s = sum(IndVec);
+    A = sparse(s,sz*sz);
+    idx = find(IndVec);
+    h = waitbar(0,'please wait')
+    for n = 1:s
+        A(n,idx(n)) = 1;
+        waitbar(n/s,h);
+    end
+    delete(h)
+end
+
+function Psi = get_Psi(m,n,dsz)           
+    % fix dct-block size to 8
+    if nargin <= 2
+        dsz     = 8;
+    end
+    % display error if the image size is not compatible with the dct-block
+    % size
+    if mod(m,dsz) > 0 || mod(n,dsz) > 0
+        error(strcat('Image size not a multiple of dsz = ',num2str(dsz,'%i')));
+        Psi = [];
+        return
+    end
+    % build Psi 
+    D           = dctmtx(dsz); 
+    Bdct        = kron(D',D);
+    
+    sz          = (m/dsz)*(n/dsz);
+    Psi         = kron(speye(sz),Bdct);
+end
+
+function PSNR = mypsnr(originvec,reconstructvec,sz)
+    PSNR = 10*log10(((sz*sz)/((originvec-reconstructvec)'*(originvec-reconstructvec))))
+end
